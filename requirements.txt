@@ -1,0 +1,9 @@
+tensorflow==1.2.1 
+keras==2.0.7
+argparse==1.1
+matplotlib==2.0.0
+scipy==0.18.1
+numpy==1.11.3
+pillow==4.0.0
+pandas==0.19.2
+h5py==2.6.0
