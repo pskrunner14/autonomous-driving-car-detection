@@ -105,4 +105,6 @@ venv.bak/
 
 model_data/yolo.h5
 model_data/yolo.weights
+model_data/yolov3.weights
+model_data/yolo-tiny.weights
 images/
