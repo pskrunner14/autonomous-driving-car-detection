@@ -1,4 +1,4 @@
-tensorflow==1.2.1 
+tensorflow==1.8.0 
 keras==2.1.5
 click==7.0
 matplotlib==2.0.0

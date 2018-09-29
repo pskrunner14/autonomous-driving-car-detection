@@ -109,8 +109,5 @@ pip-selfcheck.json
 # mypy
 .mypy_cache/
 
-model_data/yolo.h5
-model_data/yolo_model.h5
-model_data/yolo.weights
-model_data/yolov3.weights
-model_data/yolo-tiny.weights
+*.h5
+*.weights
