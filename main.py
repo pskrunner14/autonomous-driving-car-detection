@@ -62,7 +62,7 @@ def main(image_path, realtime):
     # print(out_boxes)
     # print(out_classes)
     # print(class_names[14])
-    """ Use the outputs of YOLO for make real-time detections in OpenCV """
+    """ Use the outputs of YOLO for making real-time detections in OpenCV """
 
 class YOLO():
     """YOLOv2 real-time object detection using pre-trained model.
@@ -102,7 +102,7 @@ class YOLO():
             box_class_probs (tf.Tensor):
                 Softmax probabilities for potential 
                 bounding boxes.
-            threshold (float):
+            threshold (float, optional):
                 Threshold value for minimum score for 
                 a bounding box.
 
@@ -142,10 +142,10 @@ class YOLO():
                 Corner values of bounding boxes after filtering.
             classes (tf.Tensor):
                 Classes for bounding boxes after filtering.
-             max_boxes (int):
+             max_boxes (int, optional):
                 Max. number of bounding boxes for non-max 
                 suppression.
-            iou_threshold (float):
+            iou_threshold (float, optional):
                 Intersection over union threshold for non-max 
                 suppression.
 
@@ -172,13 +172,13 @@ class YOLO():
         """Constructs graph and instantiates operations on default graph.
 
         Args:
-            max_boxes (int):
+            max_boxes (int, optional):
                 Max. number of bounding boxes for 
                 non-max suppression.
-            score_threshold (float):
+            score_threshold (float, optional):
                 Threshold value for min. score for 
                 a bounding box for score-filtering.
-            iou_threshold (float):
+            iou_threshold (float, optional):
                 Intersection over union threshold
                 for non-max suppression.
         """
