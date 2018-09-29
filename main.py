@@ -1,12 +1,10 @@
 import os
-import time
 import click
 import logging
 
 import cv2
 import keras
 import keras.backend as K
-import numpy as np
 import tensorflow as tf
 import scipy.misc as misc
 
@@ -15,7 +13,8 @@ from utils import (
     read_classes, 
     read_anchors, 
     generate_colors,
-    scale_boxes
+    scale_boxes,
+    preprocess_image_cv2
 )
 
 # imports from `yad2k` project
@@ -69,15 +68,24 @@ def main(image_path, realtime):
     if realtime:
         """ Use YOLO for making real-time detections in OpenCV """
         logging.info('starting webcam for real-time detections')
-        webcam_realtime_object_detector(yolo)
+        realtime_object_detector(yolo)
     else:
         """ Use YOLO to detect objects in imags and save the results """
         logging.info('detecting objects in `{}`'.format(image_path))
         yolo.detect_image(image_path)
 
-def webcam_realtime_object_detector(yolo=None):
+def realtime_object_detector(yolo=None):
+    """Makes real-time object detections using cam feed.
+
+    Args:
+        yolo (keras.models.Model):
+            Pre-trained YOLOv2 model in keras.
+
+    Raises:
+        ValueError: If `model` is None.
+    """
     if yolo is None:
-        raise UserWarning('YOLO model not found.')
+        raise ValueError('YOLO model not found.')
 
     logging.info('Press ESC to exit')
     cv2.namedWindow('detector')
@@ -85,11 +93,10 @@ def webcam_realtime_object_detector(yolo=None):
     
     while vc.isOpened():
         _, frame = vc.read()
-        frame  = yolo.run_yolo_detection(frame)
-        
-        key = cv2.waitKey(5)
+        frame = yolo.run_yolo_detection(frame)
         cv2.imshow('detector', frame)
 
+        key = cv2.waitKey(5)
         if key == 27: # exit on ESC
             logging.info('exiting')
             break
@@ -98,6 +105,20 @@ def webcam_realtime_object_detector(yolo=None):
     cv2.destroyWindow('detector')
 
 def draw_boxes_cv2(image, scores, boxes, classes, class_names, colors):
+    """Draws bounding boxes on frame using openCV.
+
+    Args:
+        image (numpy.ndarray):
+            Image on which to draw bounding boxes.
+        scores (numpy.ndarray):
+            Scores for each bounding box.
+        classes (numpy.ndarray):
+            Classes associated with each bounding box.
+        class_names (list of `str`):
+            List containing names of all classes.
+        colors (list of `tuple` of `int`):
+            List containing RGB values for all classes to use when drawing boxes.
+    """
     image_shape = list(reversed(image.shape[:-1]))
     for i, c in reversed(list(enumerate(classes))):
         predicted_class = class_names[c]
@@ -116,15 +137,10 @@ def draw_boxes_cv2(image, scores, boxes, classes, class_names, colors):
         text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1.3, 1)
 
         cv2.rectangle(image, (left, top), (right, bottom), colors[c], 2)
-        cv2.rectangle(image, (left, top - text_size[0][1] - 5), (left + text_size[0][0] + 3, top), colors[c], cv2.FILLED)
-        cv2.putText(image, label, (left + 3, top - 3), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
-
-def preprocess_image_cv2(image, dims):
-    resized_image = cv2.resize(image, dims, interpolation=cv2.INTER_CUBIC)
-    image_data = np.array(resized_image, dtype='float32')
-    image_data /= 255.
-    image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
-    return image_data
+        cv2.rectangle(image, (left, top - text_size[0][1] - 5), 
+                    (left + text_size[0][0] + 3, top), colors[c], cv2.FILLED)
+        cv2.putText(image, label, (left + 3, top - 3), 
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
 
 class YOLO():
     """YOLOv2 real-time object detection using pre-trained model.
@@ -140,17 +156,20 @@ class YOLO():
             YOLO anchor values.
         class_names (list of `str`):
             List containing names of all classes.
+
+    Raises:
+        UserWarning: If any arg is missing or length of dims is not 2.
     """
     def __init__(self, model_path=None, dims=None, anchors=None, class_names=None):
         if model_path is None or dims is None or len(dims) != 2 or anchors is None or class_names is None:
-            raise UserWarning('arguments do not match the spec!')
+            raise ValueError('Arguments do not match the specification.')
         self._model = keras.models.load_model(model_path, compile=False)
         self._class_names = class_names
         self._anchors = anchors
         self._dims = dims
+        self._model_input_dims = (608, 608)
         self._colors = generate_colors(self._class_names)
         self._sess = K.get_session()
-        self._model_input_dims = (608, 608)
         self._construct_graph()
 
     @staticmethod
@@ -159,17 +178,13 @@ class YOLO():
 
         Args:
             box_confidence (tf.Tensor):
-                Sigmoid confidence value for potential 
-                bounding boxes.
+                Sigmoid confidence value for potential bounding boxes.
             boxes (tf.Tensor):
-                Tensor containing potential bounding 
-                boxes' corners.
+                Tensor containing potential bounding boxes' corners.
             box_class_probs (tf.Tensor):
-                Softmax probabilities for potential 
-                bounding boxes.
+                Softmax probabilities for potential bounding boxes.
             threshold (float, optional):
-                Threshold value for minimum score for 
-                a bounding box.
+                Threshold value for minimum score for a bounding box.
 
         Returns:
             tf.Tensor:
@@ -208,11 +223,9 @@ class YOLO():
             classes (tf.Tensor):
                 Classes for bounding boxes after filtering.
              max_boxes (int, optional):
-                Max. number of bounding boxes for non-max 
-                suppression.
+                Max. number of bounding boxes for non-max suppression.
             iou_threshold (float, optional):
-                Intersection over union threshold for non-max 
-                suppression.
+                Intersection over union threshold for non-max suppression.
 
         Returns:
             tf.Tensor:
@@ -234,18 +247,15 @@ class YOLO():
         return scores, boxes, classes
 
     def _construct_graph(self, max_boxes=10, score_threshold=0.6, iou_threshold=0.5):
-        """Constructs graph and instantiates operations on default graph.
+        """Creates operations and instantiates them on default graph.
 
         Args:
             max_boxes (int, optional):
-                Max. number of bounding boxes for 
-                non-max suppression.
+                Max. number of bounding boxes for non-max suppression.
             score_threshold (float, optional):
-                Threshold value for min. score for 
-                a bounding box for score-filtering.
+                Threshold value for min. score for a bounding box for score-filtering.
             iou_threshold (float, optional):
-                Intersection over union threshold
-                for non-max suppression.
+                Intersection over union threshold for non-max suppression.
         """
         yolo_outputs = yolo_head(self._model.output, self._anchors, len(self._class_names))
         box_xy, box_wh, box_confidence, box_class_probs = yolo_outputs
@@ -270,11 +280,10 @@ class YOLO():
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
-                                                    feed_dict={self._model.input: image_data, 
-                                                                K.learning_phase(): 0})
+                                                            feed_dict={self._model.input: image_data, 
+                                                                        K.learning_phase(): 0})
         image_name = os.path.split(image_path)[-1]
         logging.info('Found {} objects belonging to known classes'.format(len(out_boxes)))
-        
         draw_boxes_cv2(image, out_scores, out_boxes, out_classes, self._class_names, self._colors)
         misc.imsave(os.path.join('images/out', image_name), image)
 
@@ -283,22 +292,17 @@ class YOLO():
         
         Args:
             frame (numpy.ndarray):
-                Single frame from the webcam feed 
-                to run YOLO detection on.
+                Single frame from the webcam feed to run YOLO detection on.
 
         Returns:
             numpy.ndarray:
-                Output frame data after detection
-                and drawing bounding boxes over it.
+                Output frame data after detection and drawing bounding boxes over it.
         """
         image_data = preprocess_image_cv2(frame, self._model_input_dims)
-        # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
-        # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
-                                                    feed_dict={self._model.input: image_data, 
-                                                                K.learning_phase(): 0})
+                                                            feed_dict={self._model.input: image_data, 
+                                                                        K.learning_phase(): 0})
         draw_boxes_cv2(frame, out_scores, out_boxes, out_classes, self._class_names, self._colors)
-        
         return frame
 
     def __del__(self):
