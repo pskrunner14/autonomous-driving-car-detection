@@ -10,26 +10,18 @@ import numpy as np
 import tensorflow as tf
 import scipy.misc as misc
 
-from multiprocessing.dummy import Pool
-from PIL import Image, ImageDraw, ImageFont
-
 # local imports
 from utils import (
     read_classes, 
     read_anchors, 
-    generate_colors, 
-    preprocess_image, 
-    draw_boxes, 
+    generate_colors,
     scale_boxes
 )
 
 # imports from `yad2k` project
 from yad2k.models.keras_yolo import (
     yolo_head, 
-    yolo_boxes_to_corners, 
-    preprocess_true_boxes, 
-    yolo_loss, 
-    yolo_body
+    yolo_boxes_to_corners
 )
 
 @click.command()
@@ -93,33 +85,46 @@ def webcam_realtime_object_detector(yolo=None):
     
     while vc.isOpened():
         _, frame = vc.read()
-        image = frame
-        image  = yolo.run_yolo_detection(image)
-        key = cv2.waitKey(10)
-        cv2.imshow('detector', image)
+        frame  = yolo.run_yolo_detection(frame)
+        
+        key = cv2.waitKey(5)
+        cv2.imshow('detector', frame)
+
         if key == 27: # exit on ESC
             logging.info('exiting')
             break
+
     logging.info('destroying detector window')
     cv2.destroyWindow('detector')
 
-def draw_boxes_cv2(image, scores, boxes, classes, class_names):
+def draw_boxes_cv2(image, scores, boxes, classes, class_names, colors):
+    image_shape = list(reversed(image.shape[:-1]))
     for i, c in reversed(list(enumerate(classes))):
         predicted_class = class_names[c]
         box = boxes[i]
         score = scores[i]
         label = '{} {:.2f}'.format(predicted_class, score)
+        label = label.upper()
 
         top, left, bottom, right = box
         top = max(0, np.floor(top + 0.5).astype('int32'))
         left = max(0, np.floor(left + 0.5).astype('int32'))
-        bottom = min(image.shape[1], np.floor(bottom + 0.5).astype('int32'))
-        right = min(image.shape[0], np.floor(right + 0.5).astype('int32'))
+        bottom = min(image_shape[1], np.floor(bottom + 0.5).astype('int32'))
+        right = min(image_shape[0], np.floor(right + 0.5).astype('int32'))
         print(label, (left, top), (right, bottom))
+    
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1.3, 1)
 
-        cv2.rectangle(image, (left, top), (right, bottom), (0, 0, 255), 2)
-        cv2.putText(image, label, 
-                (left, top - 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
+        cv2.rectangle(image, (left, top), (right, bottom), colors[c], 2)
+        cv2.rectangle(image, (left, top - text_size[0][1] - 5), (left + text_size[0][0] + 3, top), colors[c], cv2.FILLED)
+        cv2.putText(image, label, (left + 3, top - 3), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
+
+def preprocess_image_cv2(image, dims):
+    resized_image = cv2.resize(image, dims, interpolation=cv2.INTER_CUBIC)
+    image_data = np.array(resized_image, dtype='float32')
+    image_data /= 255.
+    image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
+    return image_data
 
 class YOLO():
     """YOLOv2 real-time object detection using pre-trained model.
@@ -143,6 +148,7 @@ class YOLO():
         self._class_names = class_names
         self._anchors = anchors
         self._dims = dims
+        self._colors = generate_colors(self._class_names)
         self._sess = K.get_session()
         self._model_input_dims = (608, 608)
         self._construct_graph()
@@ -258,13 +264,9 @@ class YOLO():
         Args:
             image_path (str):
                 Path to image for detection.
-
-        Returns:
-            numpy.ndarray:
-                Output image data after detection
-                and drawing bounding boxes over it.
         """
-        image, image_data = preprocess_image(image_path, self._model_input_dims)
+        image = misc.imread(image_path)
+        image_data = preprocess_image_cv2(image, self._model_input_dims)
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
@@ -273,11 +275,8 @@ class YOLO():
         image_name = os.path.split(image_path)[-1]
         logging.info('Found {} objects belonging to known classes'.format(len(out_boxes)))
         
-        colors = generate_colors(self._class_names)
-        draw_boxes(image, out_scores, out_boxes, out_classes, self._class_names, colors)
-        image.save(os.path.join('images/out', image_name), quality=90)
-        
-        return image
+        draw_boxes_cv2(image, out_scores, out_boxes, out_classes, self._class_names, self._colors)
+        misc.imsave(os.path.join('images/out', image_name), image)
 
     def run_yolo_detection(self, frame):
         """Detects objects in real-time using YOLOv2.
@@ -292,18 +291,13 @@ class YOLO():
                 Output frame data after detection
                 and drawing bounding boxes over it.
         """
-        resized_image = cv2.resize(frame, self._model_input_dims, interpolation=cv2.INTER_CUBIC)
-        image_data = np.array(resized_image, dtype='float32')
-        image_data /= 255.
-        image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
-        
+        image_data = preprocess_image_cv2(frame, self._model_input_dims)
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
                                                     feed_dict={self._model.input: image_data, 
                                                                 K.learning_phase(): 0})
-        logging.info('Found {} objects belonging to known classes'.format(len(out_boxes)))
-        draw_boxes_cv2(frame, out_scores, out_boxes, out_classes, self._class_names)
+        draw_boxes_cv2(frame, out_scores, out_boxes, out_classes, self._class_names, self._colors)
         
         return frame
 

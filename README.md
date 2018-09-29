@@ -2,7 +2,9 @@
 
 Real-time Object Detection using YOLO algorithm. You only look once (YOLO) is a state-of-the-art, real-time object detection system that is extremely fast and accurate. You can read more about it [here](https://pjreddie.com/darknet/yolo/).
 
-![YOLOv2](./images/yolo.jpg)
+<div align="center">
+   <img src="./images/yolo.jpg" width=500 height=370>
+</div>
 
 ## Getting Started
 
@@ -33,7 +35,7 @@ Once you have the pre-trained model `yolo_model.h5`, move it over to `model_data
 python main.py --realtime
 ```
 
-You can also run the detection on images, all you need to do is provide the path of the image:
+You can also run the detection on images, all you need to do is provide the path of the image (results in `images/out/`):
 
 ```bash
 python main.py --image-path images/test/cars.jpg
