@@ -27,13 +27,19 @@ Now, you can go ahead and build the Darknet19 model using:
 python yad2k.py  yolo.cfg yolo.weights yolo_model.h5 --fully_convolutional
 ```
 
-Once you have the pre-trained model `yolo_model.h5`, move it over to `model_data/` dir in your project and start detecting all kinds of stuff:
+Once you have the pre-trained model `yolo_model.h5`, move it over to `model_data/` dir in your project and start detecting all kinds of stuff in **real-time**:
+
+```bash
+python main.py --realtime
+```
+
+You can also run the detection on images, all you need to do is provide the path of the image:
 
 ```bash
 python main.py --image-path images/test/cars.jpg
 ```
 
-And you're done. Check out the `images/out/` dir for the results!
+And you're done.
 
 ## Build With
 

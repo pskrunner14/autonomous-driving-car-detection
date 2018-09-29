@@ -1,11 +1,17 @@
 import os
+import time
 import click
 import logging
 
+import cv2
 import keras
 import keras.backend as K
+import numpy as np
 import tensorflow as tf
 import scipy.misc as misc
+
+from multiprocessing.dummy import Pool
+from PIL import Image, ImageDraw, ImageFont
 
 # local imports
 from utils import (
@@ -44,25 +50,76 @@ def main(image_path, realtime):
     LOG_FORMAT = '%(levelname)s %(message)s'
     logging.basicConfig(format=LOG_FORMAT, level='INFO')
 
-    if realtime:
-        logging.info('This project currently only supports detection on images.')
-
-    image_shape = tuple([float(x) for x in misc.imread(image_path).shape[:-1]])
     anchors = read_anchors('model_data/yolo_anchors.txt')
     class_names = read_classes('model_data/coco_classes.txt')
 
+    if realtime:
+        logging.info('testing webcam frame dimensions')
+        cv2.namedWindow('test-shape')
+        vc = cv2.VideoCapture(0)
+        while vc.isOpened():
+            _, frame = vc.read()
+            image_shape = tuple([float(x) for x in frame.shape[:-1]])
+            break
+        del vc
+        cv2.destroyWindow('test-shape')
+    else:
+        image_shape = tuple([float(x) for x in misc.imread(image_path).shape[:-1]])
+
+    logging.info('loading YOLOv2 Darknet19 model')
     yolo = YOLO(
         model_path='model_data/yolo_model.h5',
         dims=image_shape,
         anchors=anchors,
         class_names=class_names
     )
-    _, out_scores, out_boxes, out_classes = yolo.detect_image(image_path)
-    # print(out_scores)
-    # print(out_boxes)
-    # print(out_classes)
-    # print(class_names[14])
-    """ Use the outputs of YOLO for making real-time detections in OpenCV """
+
+    if realtime:
+        """ Use YOLO for making real-time detections in OpenCV """
+        logging.info('starting webcam for real-time detections')
+        webcam_realtime_object_detector(yolo)
+    else:
+        """ Use YOLO to detect objects in imags and save the results """
+        logging.info('detecting objects in `{}`'.format(image_path))
+        yolo.detect_image(image_path)
+
+def webcam_realtime_object_detector(yolo=None):
+    if yolo is None:
+        raise UserWarning('YOLO model not found.')
+
+    logging.info('Press ESC to exit')
+    cv2.namedWindow('detector')
+    vc = cv2.VideoCapture(0)
+    
+    while vc.isOpened():
+        _, frame = vc.read()
+        image = frame
+        image  = yolo.run_yolo_detection(image)
+        key = cv2.waitKey(10)
+        cv2.imshow('detector', image)
+        if key == 27: # exit on ESC
+            logging.info('exiting')
+            break
+    logging.info('destroying detector window')
+    cv2.destroyWindow('detector')
+
+def draw_boxes_cv2(image, scores, boxes, classes, class_names):
+    for i, c in reversed(list(enumerate(classes))):
+        predicted_class = class_names[c]
+        box = boxes[i]
+        score = scores[i]
+        label = '{} {:.2f}'.format(predicted_class, score)
+
+        top, left, bottom, right = box
+        top = max(0, np.floor(top + 0.5).astype('int32'))
+        left = max(0, np.floor(left + 0.5).astype('int32'))
+        bottom = min(image.shape[1], np.floor(bottom + 0.5).astype('int32'))
+        right = min(image.shape[0], np.floor(right + 0.5).astype('int32'))
+        print(label, (left, top), (right, bottom))
+
+        cv2.rectangle(image, (left, top), (right, bottom), (0, 0, 255), 2)
+        cv2.putText(image, label, 
+                (left, top - 10), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
 class YOLO():
     """YOLOv2 real-time object detection using pre-trained model.
@@ -86,6 +143,8 @@ class YOLO():
         self._class_names = class_names
         self._anchors = anchors
         self._dims = dims
+        self._sess = K.get_session()
+        self._model_input_dims = (608, 608)
         self._construct_graph()
 
     @staticmethod
@@ -194,7 +253,7 @@ class YOLO():
         self._classes = classes
 
     def detect_image(self, image_path):
-        """Detects objects in image using YOLOv2.
+        """Detects objects in an image using YOLOv2.
         
         Args:
             image_path (str):
@@ -204,28 +263,52 @@ class YOLO():
             numpy.ndarray:
                 Output image data after detection
                 and drawing bounding boxes over it.
-            numpy.ndarray:
-                Output bounding boxes' scores.
-            numpy.ndarray:
-                Output bounding boxes' corner values.
-            numpy.ndarray:
-                Output bounding boxes' class probabalities.
         """
-        image, image_data = preprocess_image(image_path, model_image_size = (608, 608))
-        sess = K.get_session()
+        image, image_data = preprocess_image(image_path, self._model_input_dims)
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
-        out_scores, out_boxes, out_classes = sess.run([self._scores, self._boxes, self._classes], 
+        out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
                                                     feed_dict={self._model.input: image_data, 
                                                                 K.learning_phase(): 0})
         image_name = os.path.split(image_path)[-1]
-        logging.info('Found {} objects belonging to known classes'.format(len(out_boxes), image_name))
+        logging.info('Found {} objects belonging to known classes'.format(len(out_boxes)))
         
         colors = generate_colors(self._class_names)
         draw_boxes(image, out_scores, out_boxes, out_classes, self._class_names, colors)
         image.save(os.path.join('images/out', image_name), quality=90)
         
-        return image, out_scores, out_boxes, out_classes
+        return image
+
+    def run_yolo_detection(self, frame):
+        """Detects objects in real-time using YOLOv2.
+        
+        Args:
+            frame (numpy.ndarray):
+                Single frame from the webcam feed 
+                to run YOLO detection on.
+
+        Returns:
+            numpy.ndarray:
+                Output frame data after detection
+                and drawing bounding boxes over it.
+        """
+        resized_image = cv2.resize(frame, self._model_input_dims, interpolation=cv2.INTER_CUBIC)
+        image_data = np.array(resized_image, dtype='float32')
+        image_data /= 255.
+        image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
+        
+        # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
+        # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
+        out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
+                                                    feed_dict={self._model.input: image_data, 
+                                                                K.learning_phase(): 0})
+        logging.info('Found {} objects belonging to known classes'.format(len(out_boxes)))
+        draw_boxes_cv2(frame, out_scores, out_boxes, out_classes, self._class_names)
+        
+        return frame
+
+    def __del__(self):
+        self._sess.close()
 
 if __name__ == '__main__':
     try:
