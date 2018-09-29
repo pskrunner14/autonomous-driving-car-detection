@@ -1,5 +1,6 @@
 import os
 import click
+import logging
 
 import keras
 import keras.backend as K
@@ -40,44 +41,88 @@ from yad2k.models.keras_yolo import (
     help='Flag for real-time object detection.'
 )
 def main(image_path, realtime):
+    LOG_FORMAT = '%(levelname)s %(message)s'
+    logging.basicConfig(format=LOG_FORMAT, level='INFO')
 
-    class_names = read_classes('model_data/coco_classes.txt')
-    anchors = read_anchors('model_data/yolo_anchors.txt')
+    if realtime:
+        logging.info('This project currently only supports detection on images.')
+
     image_shape = tuple([float(x) for x in misc.imread(image_path).shape[:-1]])
+    anchors = read_anchors('model_data/yolo_anchors.txt')
+    class_names = read_classes('model_data/coco_classes.txt')
 
-    yolo = YOLO(model_path='model_data/yolo_model.h5', 
-                dims=image_shape, anchors=anchors, 
-                class_names=class_names)
+    yolo = YOLO(
+        model_path='model_data/yolo_model.h5',
+        dims=image_shape,
+        anchors=anchors,
+        class_names=class_names
+    )
     _, out_scores, out_boxes, out_classes = yolo.detect_image(image_path)
     # print(out_scores)
     # print(out_boxes)
     # print(out_classes)
     # print(class_names[14])
-    """ Use the outputs of YOLO model for make real-time detections in OpenCV """
+    """ Use the outputs of YOLO for make real-time detections in OpenCV """
 
 class YOLO():
+    """YOLOv2 real-time object detection using pre-trained model.
+    For obtaining the pre-trained model using YOLOv2 weights, see
+    YAD2K project: https://github.com/allanzelener/YAD2K.
 
+    Args:
+        model_path (str):
+            Path to pre-trained model.
+        dims (tuple of `float`):
+            Dimensions of the frame to detect objects in.
+        anchors (numpy.ndarray):
+            YOLO anchor values.
+        class_names (list of `str`):
+            List containing names of all classes.
+    """
     def __init__(self, model_path=None, dims=None, anchors=None, class_names=None):
         if model_path is None or dims is None or len(dims) != 2 or anchors is None or class_names is None:
             raise UserWarning('arguments do not match the spec!')
-        self.model = keras.models.load_model(model_path, compile=False)
-        self.class_names = class_names
-
-        yolo_outputs = yolo_head(self.model.output, anchors, len(class_names))
-        self.eval(yolo_outputs, dims)
-
+        self._model = keras.models.load_model(model_path, compile=False)
+        self._class_names = class_names
+        self._anchors = anchors
+        self._dims = dims
+        self._construct_graph()
 
     @staticmethod
-    def filter_boxes(box_confidence, boxes, box_class_probs, threshold = .6):
-        box_scores = box_confidence * box_class_probs           # Compute box scores
-        # Find the box_classes thanks to the max box_scores, 
-        # keep track of the corresponding score
-        box_classes = K.argmax(box_scores, axis=-1)             # index of max score
-        box_class_scores = K.max(box_scores, axis=-1)           # actual max score
+    def _filter_boxes(box_confidence, boxes, box_class_probs, threshold=0.6):
+        """Filter out bounding boxes that have highest scores.
+
+        Args:
+            box_confidence (tf.Tensor):
+                Sigmoid confidence value for potential 
+                bounding boxes.
+            boxes (tf.Tensor):
+                Tensor containing potential bounding 
+                boxes' corners.
+            box_class_probs (tf.Tensor):
+                Softmax probabilities for potential 
+                bounding boxes.
+            threshold (float):
+                Threshold value for minimum score for 
+                a bounding box.
+
+        Returns:
+            tf.Tensor:
+                Filtered box scores.
+            tf.Tensor:
+                Filtered box corners.
+            tf.Tensor:
+                Filtered box classes.
+        """
+        box_scores = box_confidence * box_class_probs   # Compute box scores
+        # Find box_classes thanks to max box_scores 
+        # and keep track of the corresponding score
+        box_classes = K.argmax(box_scores, axis=-1)   # index of max score
+        box_class_scores = K.max(box_scores, axis=-1)   # actual max score
         # Create a filtering mask based on 'box_class_scores' 
         # by using 'threshold'. The mask should have the same 
-        # dimension as box_class_scores, and be True for the s
-        # boxes you want to keep (with probability >= threshold)
+        # dimension as box_class_scores, and be True for the
+        # boxes we want to keep (with probability >= threshold)
         filtering_mask = box_class_scores >= threshold
         # Apply the mask to scores, boxes and classes
         scores = tf.boolean_mask(box_class_scores, filtering_mask)
@@ -87,9 +132,33 @@ class YOLO():
         return scores, boxes, classes
 
     @staticmethod
-    def non_max_suppression(scores, boxes, classes, max_boxes = 10, iou_threshold = 0.5):
-        max_boxes_tensor = K.variable(max_boxes, dtype='int32')             # tensor to be used in tf.image.non_max_suppression()
-        K.get_session().run(tf.variables_initializer([max_boxes_tensor]))   # initialize variable max_boxes_tensor
+    def _non_max_suppression(scores, boxes, classes, max_boxes=10, iou_threshold=0.5):
+        """Applies non-max suppression to bounding boxes.
+
+        Args:
+            scores (tf.Tensor):
+                Scores of bounding boxes after filtering.
+            boxes (tf.Tensor):
+                Corner values of bounding boxes after filtering.
+            classes (tf.Tensor):
+                Classes for bounding boxes after filtering.
+             max_boxes (int):
+                Max. number of bounding boxes for non-max 
+                suppression.
+            iou_threshold (float):
+                Intersection over union threshold for non-max 
+                suppression.
+
+        Returns:
+            tf.Tensor:
+                Non-max suppressed box scores.
+            tf.Tensor:
+                Non-max suppressed box corners.
+            tf.Tensor:
+                Non-max suppressed box classes.
+        """
+        max_boxes_tensor = K.variable(max_boxes, dtype='int32')             # tensor to be used in `tf.image.non_max_suppression`
+        K.get_session().run(tf.variables_initializer([max_boxes_tensor]))
         # To get the list of indices corresponding to boxes you keep
         nms_indices = tf.image.non_max_suppression(boxes, scores, max_boxes, iou_threshold=iou_threshold)
         # To select only nms_indices from scores, boxes and classes
@@ -99,46 +168,61 @@ class YOLO():
         
         return scores, boxes, classes
 
-    def eval(self, yolo_outputs, image_shape = (720., 1280.), max_boxes=10, score_threshold=.6, iou_threshold=.5):
-        # Retrieve outputs of the YOLO model
+    def _construct_graph(self, max_boxes=10, score_threshold=0.6, iou_threshold=0.5):
+        """Constructs graph and instantiates operations on default graph.
+
+        Args:
+            max_boxes (int):
+                Max. number of bounding boxes for 
+                non-max suppression.
+            score_threshold (float):
+                Threshold value for min. score for 
+                a bounding box for score-filtering.
+            iou_threshold (float):
+                Intersection over union threshold
+                for non-max suppression.
+        """
+        yolo_outputs = yolo_head(self._model.output, self._anchors, len(self._class_names))
         box_xy, box_wh, box_confidence, box_class_probs = yolo_outputs
-        # Convert boxes to be ready for filtering functions 
-        boxes = yolo_boxes_to_corners(box_xy, box_wh)
-        # Perform Score-filtering with a threshold of score_threshold
-        scores, boxes, classes = self.filter_boxes(box_confidence, boxes, box_class_probs, score_threshold)
-        # Scale boxes back to original image shape.
-        boxes = scale_boxes(boxes, image_shape)
-        # Perform Non-max suppression with a threshold of iou_threshold
-        scores, boxes, classes = self.non_max_suppression(scores, boxes, classes, max_boxes, iou_threshold)
-        # Instantiate operations
-        self.scores = scores
-        self.boxes = boxes
-        self.classes = classes
+        boxes = yolo_boxes_to_corners(box_xy, box_wh)   # Convert boxes to be ready for filtering functions
+        scores, boxes, classes = self._filter_boxes(box_confidence, boxes, box_class_probs, score_threshold)
+        boxes = scale_boxes(boxes, self._dims)   # Scale boxes back to original image shape.
+        scores, boxes, classes = self._non_max_suppression(scores, boxes, classes, max_boxes, iou_threshold)
+        # Save tensors for later evaluation
+        self._scores = scores
+        self._boxes = boxes
+        self._classes = classes
 
     def detect_image(self, image_path):
-        """Detect objects in image using YOLO.
+        """Detects objects in image using YOLOv2.
         
         Args:
             image_path (str):
                 Path to image for detection.
-        """
-        # Preprocess your image
-        image, image_data = preprocess_image(image_path, model_image_size = (608, 608))
 
+        Returns:
+            numpy.ndarray:
+                Output image data after detection
+                and drawing bounding boxes over it.
+            numpy.ndarray:
+                Output bounding boxes' scores.
+            numpy.ndarray:
+                Output bounding boxes' corner values.
+            numpy.ndarray:
+                Output bounding boxes' class probabalities.
+        """
+        image, image_data = preprocess_image(image_path, model_image_size = (608, 608))
         sess = K.get_session()
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
-        out_scores, out_boxes, out_classes = sess.run([self.scores, self.boxes, self.classes], 
-                                                    feed_dict={self.model.input: image_data, 
+        out_scores, out_boxes, out_classes = sess.run([self._scores, self._boxes, self._classes], 
+                                                    feed_dict={self._model.input: image_data, 
                                                                 K.learning_phase(): 0})
         image_name = os.path.split(image_path)[-1]
-        # Print predictions info
-        print('Found {} objects belonging to known classes'.format(len(out_boxes), image_name))
-        # Generate colors for drawing bounding boxes.
-        colors = generate_colors(self.class_names)
-        # Draw bounding boxes on the image file
-        draw_boxes(image, out_scores, out_boxes, out_classes, self.class_names, colors)
-        # Save the predicted bounding box on the image
+        logging.info('Found {} objects belonging to known classes'.format(len(out_boxes), image_name))
+        
+        colors = generate_colors(self._class_names)
+        draw_boxes(image, out_scores, out_boxes, out_classes, self._class_names, colors)
         image.save(os.path.join('images/out', image_name), quality=90)
         
         return image, out_scores, out_boxes, out_classes
