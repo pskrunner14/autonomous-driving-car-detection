@@ -9,7 +9,7 @@ import scipy.misc as misc
 from matplotlib.pyplot import imshow
 
 # local imports
-from utils import (
+from .utils import (
     read_classes, 
     read_anchors, 
     generate_colors, 
@@ -18,7 +18,7 @@ from utils import (
     scale_boxes
 )
 
-# imports from `keras_yolo` project
+# imports from `yad2k` project
 from yad2k.models.keras_yolo import (
     yolo_head, 
     yolo_boxes_to_corners, 
