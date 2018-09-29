@@ -28,6 +28,7 @@ def space_to_depth_x2(x):
     """Thin wrapper for Tensorflow space_to_depth with block_size=2."""
     # Import currently required to make Lambda work.
     # See: https://github.com/fchollet/keras/issues/5088#issuecomment-273851273
+    import tensorflow as tf
     return tf.space_to_depth(x, block_size=2)
 
 

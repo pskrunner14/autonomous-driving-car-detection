@@ -9,7 +9,7 @@ import scipy.misc as misc
 from matplotlib.pyplot import imshow
 
 # local imports
-from .utils import (
+from utils import (
     read_classes, 
     read_anchors, 
     generate_colors, 
@@ -37,11 +37,12 @@ def main(image_path):
     anchors = read_anchors('model_data/yolo_anchors.txt')
     image_shape = (720., 1280.)
 
-    model = keras.models.load_model('model_data/yolo.h5')
+    model = keras.models.load_model('model_data/yolo_model.h5')
 
     yolo_outputs = yolo_head(model.output, anchors, len(class_names))
     scores, boxes, classes = YOLO.eval(yolo_outputs, image_shape)
-    out_scores, out_boxes, out_classes = YOLO.predict(sess, image_path)
+    out_scores, out_boxes, out_classes = YOLO.detect(sess, model, scores, boxes, classes, class_names, image_path)
+    """ Use the outputs of YOLO model for make real-time detections in OpenCV """
 
 class YOLO():
 
@@ -87,7 +88,7 @@ class YOLO():
     def eval(yolo_outputs, image_shape = (720., 1280.), max_boxes=10, score_threshold=.6, iou_threshold=.5):
 
         # Retrieve outputs of the YOLO model
-        box_confidence, box_xy, box_wh, box_class_probs = yolo_outputs
+        box_xy, box_wh, box_confidence, box_class_probs = yolo_outputs
 
         # Convert boxes to be ready for filtering functions 
         boxes = yolo_boxes_to_corners(box_xy, box_wh)
@@ -104,32 +105,44 @@ class YOLO():
         return scores, boxes, classes
 
     @staticmethod
-    def detect(sess, image_path):
+    def detect(sess, model, scores, boxes, classes, class_names, image_path):
         """Detect objects in image using YOLO.
         
         Args:
             sess (tf.Session):
-                Session for Keras `backend`
+                Session for Keras `backend`.
+            model (keras.models.Model):
+                Pre-trained YOLO model.
+            scores (tf.tensor):
+                Scores tensor op in YOLO graph.
+            boxes (tf.tensor):
+                Boxes tensor op in YOLO graph.
+            classes (tf.tensor):
+                Classes tensor op in YOLO graph.
+            class_names (list):
+                List of names of all classes.
             image_path (str):
                 Path to image for detection.
         """
         # Preprocess your image
-        image, image_data = preprocess_image('images/test/' + image_path, model_image_size = (608, 608))
+        image, image_data = preprocess_image(image_path, model_image_size = (608, 608))
 
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
-        out_scores, out_boxes, out_classes = sess.run([scores, boxes, classes], feed_dict={yolo_model.input: image_data, K.learning_phase(): 0})
-
+        out_scores, out_boxes, out_classes = sess.run([scores, boxes, classes], 
+                                                    feed_dict={model.input: image_data, 
+                                                                K.learning_phase(): 0})
+        image_name = os.path.split(image_path)[-1]
         # Print predictions info
-        print('Found {} boxes for {}'.format(len(out_boxes), image_file))
+        print('Found {} boxes for {}'.format(len(out_boxes), image_name))
         # Generate colors for drawing bounding boxes.
         colors = generate_colors(class_names)
         # Draw bounding boxes on the image file
         draw_boxes(image, out_scores, out_boxes, out_classes, class_names, colors)
         # Save the predicted bounding box on the image
-        image.save(os.path.join('images/out', image_file), quality=90)
+        image.save(os.path.join('images/out', image_name), quality=90)
         # Display the results in the notebook
-        output_image = misc.imread(os.path.join('images/out', image_file))
+        output_image = misc.imread(os.path.join('images/out', image_name))
         imshow(output_image)
         
         return out_scores, out_boxes, out_classes

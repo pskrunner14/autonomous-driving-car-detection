@@ -1,6 +1,5 @@
 import colorsys
 import imghdr
-import os
 import random
 from keras import backend as K
 
