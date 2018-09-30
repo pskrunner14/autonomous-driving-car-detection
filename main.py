@@ -26,14 +26,7 @@ def main(image_path, realtime):
 
     if realtime:
         logging.info('testing webcam frame dimensions')
-        cv2.namedWindow('test-shape')
-        vc = cv2.VideoCapture(0)
-        while vc.isOpened():
-            _, frame = vc.read()
-            image_shape = tuple([float(x) for x in frame.shape[:-1]])
-            break
-        del vc
-        cv2.destroyWindow('test-shape')
+        image_shape = get_cam_dims()
     else:
         image_shape = tuple([float(x) for x in io.imread(image_path).shape[:-1]])
 
@@ -83,6 +76,23 @@ def realtime_object_detector(yolo=None):
 
     logging.info('destroying detector window')
     cv2.destroyWindow('detector')
+
+def get_cam_dims():
+    """Returns the webcam frame dimensions.
+    
+    Returns:
+        tuple of `float`:
+            Frame dimensions of webcam using OpenCV.
+    """
+    cv2.namedWindow('test-shape')
+    vc = cv2.VideoCapture(0)
+    while vc.isOpened():
+        _, frame = vc.read()
+        image_shape = tuple([float(x) for x in frame.shape[:-1]])
+        break
+    del vc
+    cv2.destroyWindow('test-shape')
+    return image_shape
 
 if __name__ == '__main__':
     try:
