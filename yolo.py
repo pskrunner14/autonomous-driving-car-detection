@@ -38,7 +38,7 @@ class YOLO():
             Dimensions of the frame to detect objects in.
 
     Raises:
-        UserWarning: If any arg is missing or length of dims is not 2.
+        ValueError: If any arg is missing or length of dims is not 2.
     """
     def __init__(self, model_path=None, anchors_path=None, classes_path=None, dims=None):
         if model_path is None or anchors_path is None or classes_path is None or dims is None or len(dims) != 2:
