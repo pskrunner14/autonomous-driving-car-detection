@@ -75,14 +75,12 @@ class YOLO():
                 Filtered box classes.
         """
         box_scores = box_confidence * box_class_probs   # Compute box scores
-        # Find box_classes thanks to max box_scores 
+        # Find box_classes using max box_scores 
         # and keep track of the corresponding score
         box_classes = K.argmax(box_scores, axis=-1)   # index of max score
         box_class_scores = K.max(box_scores, axis=-1)   # actual max score
         # Create a filtering mask based on 'box_class_scores' 
-        # by using 'threshold'. The mask should have the same 
-        # dimension as box_class_scores, and be True for the
-        # boxes we want to keep (with probability >= threshold)
+        # by using 'threshold' (with probability >= threshold).
         filtering_mask = box_class_scores >= threshold
         # Apply the mask to scores, boxes and classes
         scores = tf.boolean_mask(box_class_scores, filtering_mask)
@@ -157,7 +155,6 @@ class YOLO():
         """
         image = io.imread(image_path)
         image_data = self._preprocess_image_cv2(image)
-        # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
                                                             feed_dict={self._model.input: image_data, 
