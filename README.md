@@ -48,8 +48,7 @@ And you're done.
 * Python
 * Keras
 * TensorFlow
-* Pillow
-* Scipy
+* OpenCV
 
 ## References
 
