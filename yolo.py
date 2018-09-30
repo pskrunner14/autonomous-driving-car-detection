@@ -1,19 +1,18 @@
 import os
 import logging
 
+import cv2
 import keras
-import keras.backend as K
-import tensorflow as tf
+import numpy as np
 import imageio as io
+import tensorflow as tf
+import keras.backend as K
 
 # local imports
 from utils import (
     read_classes, 
     read_anchors, 
-    generate_colors,
-    preprocess_image_cv2,
-    scale_boxes,
-    draw_boxes_cv2
+    generate_colors
 )
 
 # imports from `yad2k` project
@@ -47,6 +46,7 @@ class YOLO():
         self._anchors = read_anchors(anchors_path)
         self._class_names = read_classes(classes_path)
         self._dims = dims
+        self._image_shape = list(reversed([int(x) for x in dims]))
         self._model_input_dims = (608, 608)
         self._colors = generate_colors(self._class_names)
         self._sess = K.get_session()
@@ -141,7 +141,7 @@ class YOLO():
         box_xy, box_wh, box_confidence, box_class_probs = yolo_outputs
         boxes = yolo_boxes_to_corners(box_xy, box_wh)   # Convert boxes to be ready for filtering functions
         scores, boxes, classes = self._filter_boxes(box_confidence, boxes, box_class_probs, score_threshold)
-        boxes = scale_boxes(boxes, self._dims)   # Scale boxes back to original image shape.
+        boxes = self._scale_boxes(boxes)   # Scale boxes back to original image shape.
         scores, boxes, classes = self._non_max_suppression(scores, boxes, classes, max_boxes, iou_threshold)
         # Save tensors for later evaluation
         self._scores = scores
@@ -156,7 +156,7 @@ class YOLO():
                 Path to image for detection.
         """
         image = io.imread(image_path)
-        image_data = preprocess_image_cv2(image, self._model_input_dims)
+        image_data = self._preprocess_image_cv2(image)
         # Run the session with the correct tensors and choose the correct placeholders in the feed_dict.
         # Need to use feed_dict={yolo_model.input: ... , K.learning_phase(): 0})
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
@@ -164,7 +164,7 @@ class YOLO():
                                                                         K.learning_phase(): 0})
         image_name = os.path.split(image_path)[-1]
         logging.info('found {} objects belonging to known classes'.format(len(out_boxes)))
-        draw_boxes_cv2(image, out_scores, out_boxes, out_classes, self._class_names, self._colors)
+        self._draw_boxes_cv2(image, out_scores, out_boxes, out_classes)
         logging.info('saving result in `images/out/{}`'.format(image_name))
         io.imsave(os.path.join('images/out', image_name), image)
 
@@ -179,12 +179,76 @@ class YOLO():
             numpy.ndarray:
                 Output frame data after detection and drawing bounding boxes over it.
         """
-        image_data = preprocess_image_cv2(frame, self._model_input_dims)
+        image_data = self._preprocess_image_cv2(frame)
         out_scores, out_boxes, out_classes = self._sess.run([self._scores, self._boxes, self._classes], 
                                                             feed_dict={self._model.input: image_data, 
                                                                         K.learning_phase(): 0})
-        draw_boxes_cv2(frame, out_scores, out_boxes, out_classes, self._class_names, self._colors)
+        self._draw_boxes_cv2(frame, out_scores, out_boxes, out_classes)
         return frame
+
+    def _preprocess_image_cv2(self, image):
+        """Preprocesses and normalizes an image using openCV.
+
+        Args:
+            image (numpy.ndarray):
+                Image to preprocess.
+
+        Returns:
+            numpy.ndarray: Preprocessed image data.
+        """
+        resized_image = cv2.resize(image, self._model_input_dims, interpolation=cv2.INTER_CUBIC)
+        image_data = np.array(resized_image, dtype='float32')
+        image_data /= 255.
+        image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
+        return image_data
+
+    def _scale_boxes(self, boxes):
+        """Scales the predicted boxes in order to be drawable on the image
+        
+        Args:
+            boxes (tf.Tensor):
+                Corner values of bounding boxes.
+
+        Returns:
+            tf.Tensor: Scaled corner values for bounding boxes.
+        """
+        height, width = self._dims
+        image_dims = K.stack([height, width, height, width])
+        image_dims = K.reshape(image_dims, [1, 4])
+        boxes = boxes * image_dims
+        return boxes
+
+    def _draw_boxes_cv2(self, image, scores, boxes, classes):
+        """Draws bounding boxes on frame using openCV.
+
+        Args:
+            image (numpy.ndarray):
+                Image on which to draw bounding boxes.
+            scores (numpy.ndarray):
+                Scores for each bounding box.
+            classes (numpy.ndarray):
+                Classes associated with each bounding box.
+        """
+        for i, c in reversed(list(enumerate(classes))):
+            predicted_class = self._class_names[c]
+            box = boxes[i]
+            score = scores[i]
+            label = '{} {:.2f}'.format(predicted_class, score)
+
+            top, left, bottom, right = box
+            top = max(0, np.floor(top + 0.5).astype('int32'))
+            left = max(0, np.floor(left + 0.5).astype('int32'))
+            bottom = min(self._image_shape[1], np.floor(bottom + 0.5).astype('int32'))
+            right = min(self._image_shape[0], np.floor(right + 0.5).astype('int32'))
+            print(label, (left, top), (right, bottom))
+        
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.8, 2)
+
+            cv2.rectangle(image, (left, top), (right, bottom), self._colors[c], 2)
+            cv2.rectangle(image, (left, top - text_size[0][1] - 10), 
+                        (left + text_size[0][0] + 10, top), self._colors[c], cv2.FILLED)
+            cv2.putText(image, label, (left + 5, top - 5), 
+                        cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 0, 0), 2)
 
     def __del__(self):
         self._sess.close()
